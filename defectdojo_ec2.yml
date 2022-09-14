@@ -1,0 +1,417 @@
+---
+  AWSTemplateFormatVersion: 2010-09-09
+  Description: DefectDojo Setup
+  Parameters:
+    ApplicationName:
+      Type: String
+    ELBScheme:
+      Type: String
+    ALBType:
+      Type: String
+    DefectDojoAppPort:
+      Type: String
+    ALBSSLCertificateARN:
+      Type: String
+    ALBHTTPSListenerPort:
+      Type: String
+    AMIID:
+      Type: String
+    InstanceType:
+      Type: String
+    BastionInstanceType:
+      Type: String
+    KeyName:
+      Type: String
+    AppEBSVolumeSize:
+      Type: String
+    AppEBSVolumeType:
+      Type: String
+    AppEBSVolumeDevicePath:
+      Type: String
+    AppEBSVolumeDevicePath:
+      Type: String
+    AppEBSVolumeMountPoint:
+      Type: String
+    AppEBSNitroDevice:
+      Type: String
+    DefectDojoURL:
+      Type: String
+    DefectoDojoRepoURL:
+      Type: String
+    DefectDojoRepoBranch:
+      Type: String
+    DefectDojoBatchModeDBType:
+      Type: String
+    DefectDojoBatchModeSQLHost:
+      Type: String
+    DefectDojoBatchModeSQLPort:
+      Type: String
+    DefectDojoBatchModeSQLUser:
+      Type: String
+    DefectDojoBatchModeSQLPassword:
+      Type: String
+    DefectDojoBatchModeDBName:
+      Type: String
+    DefectDojoBatchModeAdminUser:
+      Type: String
+    DefectDojoBatchModeAdminPassword:
+      Type: String
+    MarketTag:
+      Type: String
+    EngagementOfficeTag:
+      Type: String
+    POCNameTag:
+      Type: String
+    ManagerNameTag:
+      Type: String
+    POCEmailTag:
+      Type: String
+  Resources:
+    DefectDojoTG:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Properties:
+        HealthCheckIntervalSeconds: 6
+        HealthCheckPath: /
+        HealthCheckPort: !Ref DefectDojoAppPort
+        HealthCheckProtocol: HTTP
+        HealthCheckTimeoutSeconds: 5
+        HealthyThresholdCount: 2
+        Matcher:
+          HttpCode: '200,302'
+        Name: !Ref ApplicationName
+        Port: !Ref DefectDojoAppPort
+        Protocol: HTTP
+        TargetType: instance
+        Targets:
+          - Id: !Ref DefectDojoAppInstance
+            Port: !Ref DefectDojoAppPort
+        UnhealthyThresholdCount: 2
+        VpcId:
+          Fn::ImportValue: !Sub ${ApplicationName}-VPCID
+        Tags:
+          -
+            Key: "ApplicationName"
+            Value: !Ref ApplicationName
+          -
+            Key: "Market"
+            Value: !Ref MarketTag
+          -
+            Key: "Engagement Office"
+            Value: !Ref EngagementOfficeTag
+          -
+            Key: "Name"
+            Value: !Ref POCNameTag
+          -
+            Key: "Manager"
+            Value: !Ref ManagerNameTag
+          -
+            Key: "Email"
+            Value: !Ref POCEmailTag
+    DefectDojoALB:
+      Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+      Properties:
+        Name: !Ref ApplicationName
+        Scheme: !Ref ELBScheme
+        SecurityGroups:
+          - Fn::ImportValue: !Sub ${ApplicationName}-ELBSG
+        Subnets:
+          - Fn::ImportValue: !Sub ${ApplicationName}-PublicSubnet1ID
+          - Fn::ImportValue: !Sub ${ApplicationName}-PublicSubnet2ID
+        Type: !Ref ALBType
+        Tags:
+          -
+            Key: "ApplicationName"
+            Value: !Ref ApplicationName
+          -
+            Key: "ResourceName"
+            Value: !Join ["-" , [!Ref ApplicationName, "ALB"]]
+          -
+            Key: "Market"
+            Value: !Ref MarketTag
+          -
+            Key: "Engagement Office"
+            Value: !Ref EngagementOfficeTag
+          -
+            Key: "Name"
+            Value: !Ref POCNameTag
+          -
+            Key: "Manager"
+            Value: !Ref ManagerNameTag
+          -
+            Key: "Email"
+            Value: !Ref POCEmailTag
+    DefectDojoALBHTTPSListener:
+      Type: AWS::ElasticLoadBalancingV2::Listener
+      Properties:
+        Certificates:
+          - CertificateArn: !Ref ALBSSLCertificateARN
+        DefaultActions:
+          - Type: forward
+            TargetGroupArn: !Ref DefectDojoTG
+        LoadBalancerArn: !Ref DefectDojoALB
+        Port: !Ref ALBHTTPSListenerPort
+        Protocol: HTTPS
+    DefectDojoAppInstance:
+      Type: AWS::EC2::Instance
+      CreationPolicy:
+        ResourceSignal:
+          Timeout: PT7M
+      Metadata:
+        AWS::CloudFormation::Init:
+          configSets:
+            DefectDojoSetup:
+              - install_and_enable_cfn_hup
+              - install_packages
+          install_and_enable_cfn_hup:
+            files:
+              /etc/cfn/cfn-hup.conf:
+                content: !Join
+                  - ''
+                  - - "[main]\n"
+                    - stack=
+                    - !Ref 'AWS::StackId'
+                    - "\n"
+                    - region=
+                    - !Ref 'AWS::Region'
+                    - "\n"
+                mode: '000400'
+                owner: root
+                group: root
+              /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+                content: !Join
+                  - ''
+                  - - "[cfn-auto-reloader-hook]\n"
+                    - "triggers=post.update\n"
+                    - "path=Resources.DefectDojoAppInstance.Metadata.AWS::CloudFormation::Init\n"
+                    - 'action=/opt/aws/bin/cfn-init -v '
+                    - '         --stack '
+                    - !Ref 'AWS::StackName'
+                    - '         --resource DefectDojoAppInstance '
+                    - '         --configsets DefectDojoSetup '
+                    - '         --region '
+                    - !Ref 'AWS::Region'
+                    - "\n"
+                    - "runas=root\n"
+              /lib/systemd/system/cfn-hup.service:
+                content: !Join
+                  - ''
+                  - - "[Unit]\n"
+                    - "Description=cfn-hup daemon\n\n"
+                    - "[Service]\n"
+                    - "Type=simple\n"
+                    - "ExecStart=/opt/aws/bin/cfn-hup\n"
+                    - "Restart=always\n\n"
+                    - "[Install]\n"
+                    - WantedBy=multi-user.target
+            commands:
+              '01enable_cfn_hup':
+                command: systemctl enable cfn-hup.service
+              '02start_cfn_hup':
+                command: systemctl start cfn-hup.service
+          install_packages:
+            packages:
+              apt:
+                expect: []
+      Properties:
+        ImageId: !Ref AMIID
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${ApplicationName}-AppSG
+        SubnetId:
+          Fn::ImportValue: !Sub ${ApplicationName}-PrivateSubnet1ID
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              Encrypted: True
+              VolumeSize: 20
+          - DeviceName: !Ref AppEBSVolumeDevicePath
+            Ebs:
+              Encrypted: True
+              VolumeSize: !Ref AppEBSVolumeSize
+        UserData:
+          Fn::Base64: !Sub |
+              #!/bin/bash -xe
+
+              # Change apt sources.list from Client specific to Ubuntu Official
+              # mv /etc/apt/sources.list /etc/apt/sources.list.bak
+              # wget https://gist.githubusercontent.com/ishad0w/788555191c7037e249a439542c53e170/raw/3822ba49241e6fd851ca1c1cbcc4d7e87382f484/sources.list -O /etc/apt/sources.list
+              
+              # Update repo packages
+              apt-get update -y
+
+              # 'expect' package required by DefectDojo
+              # AWS Cloud Init Setup
+              apt-get install -y python-setuptools git apt-utils python3-pip expect ca-certificates curl gnupg lsb-release 
+              
+              #Install Docker
+              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+              # Make keyring public readable (bugfix)
+              chmod a+r /usr/share/keyrings/docker-archive-keyring.gpg
+              # Install docker from official repo
+              apt-get update -y
+              apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin 
+              
+              #Install Docker Compose Standalone
+              apt-get install -y docker-compose
+
+              #Install AWS CFNtools
+              mkdir -p /opt/aws/bin
+              pip3 install  https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+
+              #Install yq to edit yaml files programatically
+              wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+              chmod a+x /usr/local/bin/yq
+
+              #Format and Mount Volume
+              mkfs -t ext4 ${AppEBSNitroDevice}
+              mkdir -p ${AppEBSVolumeMountPoint}
+              mount ${AppEBSNitroDevice} ${AppEBSVolumeMountPoint}
+              uuid=$(blkid ${AppEBSNitroDevice} | cut -d " " -f2)
+              echo $uuid ${AppEBSVolumeMountPoint} ext4 defaults 0 2 >> /etc/fstab
+              mount -a
+
+              #Download Code
+              cd ${AppEBSVolumeMountPoint}
+              if [ ${DefectDojoRepoBranch} == "master" ]
+              then
+                git clone ${DefectoDojoRepoURL}
+              else
+                git clone -b ${DefectDojoRepoBranch} ${DefectoDojoRepoURL}
+              fi
+              chown -R ubuntu:ubuntu ${AppEBSVolumeMountPoint}
+
+              #Export BATCH MODE Properties
+              private_ip=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+              batch_mode_properties_file=${AppEBSVolumeMountPoint}/django-DefectDojo/.env
+              echo "docker-compose environment file $batch_mode_properties_file" > /tmp/environment.txt
+              rm -f $batch_mode_properties_file
+
+              #This is where we need to parse the .env file for docker deployment
+              # External URL Tied to the Route 53 entry
+              echo DD_SITE_URL=${DefectDojoURL} >> $batch_mode_properties_file
+              # Hardcoded MySQL RDS for now
+              echo DD_DATABASE_ENGINE=django.db.backends.mysql >> $batch_mode_properties_file
+              echo DD_CELERY_BROKER_URL='amqp://guest:guest@rabbitmq:5672//' >> $batch_mode_properties_file
+              echo DD_CELERY_BEAT_SCHEDULE_FILENAME="/run/celery-beat-schedule" >> $batch_mode_properties_file
+              echo DD_CELERY_BROKER_SCHEME="amqp" >> $batch_mode_properties_file
+              echo DD_CELERY_BROKER_USER="guest" >> $batch_mode_properties_file
+              echo DD_CELERY_BROKER_PASSWORD="guest" >> $batch_mode_properties_file
+              echo DD_CELERY_BROKER_HOST="rabbitmq" >> $batch_mode_properties_file
+              echo DD_CELERY_BROKER_PORT="5672" >> $batch_mode_properties_file
+              echo DD_CELERY_BROKER_PATH="//" >> $batch_mode_properties_file
+              echo DD_CELERY_LOG_LEVEL="INFO" >> $batch_mode_properties_file
+              echo DD_CELERY_WORKER_POOL_TYPE="solo" >> $batch_mode_properties_file
+
+              # Hostname and settings of RDS database backend
+              echo DD_DATABASE_URL=mysql://${DefectDojoBatchModeSQLUser}:${DefectDojoBatchModeSQLPassword}@${DefectDojoBatchModeSQLHost}:${DefectDojoBatchModeSQLPort}/${DefectDojoBatchModeDBName} >> $batch_mode_properties_file
+              echo DD_DATABASE_HOST=${DefectDojoBatchModeSQLHost} >> $batch_mode_properties_file
+              echo DD_DATABASE_PORT=${DefectDojoBatchModeSQLPort} >> $batch_mode_properties_file
+              echo DD_DATABASE_USER=${DefectDojoBatchModeSQLUser} >> $batch_mode_properties_file
+              echo DD_DATABASE_PASSWORD=${DefectDojoBatchModeSQLPassword} >> $batch_mode_properties_file
+              echo DD_DATABASE_NAME=${DefectDojoBatchModeDBName} >> $batch_mode_properties_file
+              # Admin user other than default
+              echo DD_ADMIN_USER=${DefectDojoBatchModeAdminUser} >> $batch_mode_properties_file
+              # Should be the Admin user password
+              # echo DD_SECRET_KEY=${DefectDojoBatchModeAdminPassword} >> $batch_mode_properties_file
+              # Who is allowed to access the DefectDojo application
+              echo ALLOWED_HOSTS="[\'${DefectDojoALB.DNSName}\',\'$private_ip\',\'127.0.0.1\']" >> $batch_mode_properties_file
+              # Set maximum upload size to 64MB
+              echo DD_DATA_UPLOAD_MAX_MEMORY_SIZE=67108864 >> $batch_mode_properties_file
+
+              # Send Cloudformation signal that stack provisioned correctly
+              /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource DefectDojoAppInstance --configsets DefectDojoSetup --region ${AWS::Region}
+              /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource DefectDojoAppInstance --region ${AWS::Region}
+
+              # Make space for docker-compose file
+              mv ${AppEBSVolumeMountPoint}/django-DefectDojo/docker-compose.yml ${AppEBSVolumeMountPoint}/django-DefectDojo/docker-compose.yml.bak
+              
+              # Download the customized docker-compose file from wherever you need to
+              gitsecret="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"
+              git clone https://joshconkel:$gitsecret@github.com/joshconkel/vma-defectdojo.git
+              cp /defectdojo/vma-defectdojo/docker-compose.yml /defectdojo/django-DefectDojo/docker-compose.yml
+              
+              # Start your (docker) engines!
+              docker-compose -f ${AppEBSVolumeMountPoint}/django-DefectDojo/docker-compose.yml --env-file ${AppEBSVolumeMountPoint}/django-DefectDojo/.env up -d
+
+              #Changing Admin User password explicitly. Password reset through batch_mode is not working.
+
+        Tags:
+          -
+            Key: "ApplicationName"
+            Value: !Ref ApplicationName
+          -
+            Key: "ResourceName"
+            Value: !Join ["-" , [!Ref ApplicationName, "Instance"]]
+          -
+            Key: "Market"
+            Value: !Ref MarketTag
+          -
+            Key: "Engagement Office"
+            Value: !Ref EngagementOfficeTag
+          -
+            Key: "Name"
+            Value: !Ref POCNameTag
+          -
+            Key: "Manager"
+            Value: !Ref ManagerNameTag
+          -
+            Key: "Email"
+            Value: !Ref POCEmailTag
+    DefectDojoBastionInstance:
+      Type: AWS::EC2::Instance
+      Properties:
+        ImageId: !Ref AMIID
+        InstanceType: !Ref BastionInstanceType
+        KeyName: !Ref KeyName
+        NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - Fn::ImportValue: !Sub ${ApplicationName}-BastionSG
+          SubnetId:
+            Fn::ImportValue: !Sub ${ApplicationName}-PublicSubnet1ID
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              Encrypted: True
+              VolumeSize: 20
+        Tags:
+          -
+            Key: "ApplicationName"
+            Value: !Ref ApplicationName
+          -
+            Key: "ResourceName"
+            Value: !Join ["-" , [!Ref ApplicationName, "Bastion"]]
+          -
+            Key: "public-ip-exception"
+            Value: "proxy"
+          -
+            Key: "Market"
+            Value: !Ref MarketTag
+          -
+            Key: "Engagement Office"
+            Value: !Ref EngagementOfficeTag
+          -
+            Key: "Name"
+            Value: !Ref POCNameTag
+          -
+            Key: "Manager"
+            Value: !Ref ManagerNameTag
+          -
+            Key: "Email"
+            Value: !Ref POCEmailTag
+  Outputs:
+    ALB:
+      Value: !Ref DefectDojoALB
+    ALBDNSName:
+      Value: !GetAtt DefectDojoALB.DNSName
+    TG:
+      Value: !Ref DefectDojoTG
+    AppInstance:
+      Value: !Ref DefectDojoAppInstance
+    BastionInstance:
+      Value: !Ref DefectDojoBastionInstance
+
+
